@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <!-- スマホ用のviewport設定 -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Cueコントロールアプリ</title>
+  <style>
+    /* 共通スタイル */
+    body {
+      font-family: Arial, sans-serif;
+      margin: 20px;
+      background-color: black;
+      color: white;
+    }
+    h1, h2 {
+      text-align: center;
+    }
+    #clock, #stopwatch, #nextCue {
+      font-size: 2em;
+      margin: 10px 0;
+      text-align: center;
+    }
+    button {
+      margin: 5px;
+      padding: 10px;
+      background-color: #333;
+      color: white;
+      border: none;
+      cursor: pointer;
+    }
+    button:hover {
+      background-color: #555;
+    }
+    .input-group {
+      text-align: center;
+      margin: 10px 0;
+    }
+    input[type="text"] {
+      padding: 5px;
+      font-size: 1em;
+      width: 80px;
+      text-align: center;
+      background-color: #222;
+      color: white;
+      border: 1px solid #555;
+      margin-right: 5px;
+    }
+    .cueList {
+      margin-top: 20px;
+      padding: 0;
+      list-style: none;
+    }
+    .cue {
+      margin: 5px;
+      padding: 10px;
+      background-color: #111;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid #444;
+      transition: background-color 0.5s;
+    }
+    .cue span {
+      flex-grow: 1;
+    }
+    /* Cue開始5秒前から赤色リマインド */
+    .remind {
+      background-color: red !important;
+    }
+    
+    /* スマホ横画面（ランドスケープ）の調整：2列レイアウト */
+    @media screen and (min-width: 480px) and (orientation: landscape) {
+      body {
+        margin: 10px;
+      }
+      .landscape-columns {
+        display: flex;
+        justify-content: space-between;
+      }
+      .landscape-columns > .col {
+        flex: 1;
+        margin: 0 5px;
+      }
+      #clock, #stopwatch, #nextCue {
+        font-size: 2.5em;
+      }
+      button {
+        padding: 15px;
+        font-size: 1.2em;
+      }
+      input[type="text"] {
+        width: 100px;
+        font-size: 1.2em;
+      }
+      .cue {
+        padding: 15px;
+      }
+    }
+    
+    /* ストップウォッチ表示と操作を一体化 */
+    .stopwatch-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .stopwatch-display {
+      position: relative;
+      font-size: 2em;
+      margin-bottom: 10px;
+      padding: 10px 20px;
+      background-color: #222;
+      border-radius: 5px;
+    }
+    .stopwatch-controls {
+      display: flex;
+      gap: 10px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Cueコントロールアプリ</h1>
+  <div class="landscape-columns">
+    <!-- 左カラム：時計・ストップウォッチ・次のCue -->
+    <div class="col">
+      <!-- 24時間時計 -->
+      <div id="clock">00時00分00秒</div>
+      
+      <!-- ストップウォッチと操作ボタンの統合 -->
+      <div class="stopwatch-container">
+        <div id="stopwatch" class="stopwatch-display">00:00:00.00</div>
+        <div class="stopwatch-controls">
+          <button id="toggleStopwatch">スタート</button>
+          <button id="resetStopwatch">リセット</button>
+        </div>
+      </div>
+      
+      <!-- 次のCueまでの時間 -->
+      <div id="nextCue">次のCueまで: --秒</div>
+    </div>
+    
+    <!-- 右カラム：Cue登録とリスト -->
+    <div class="col">
+      <!-- Cue登録 -->
+      <h2>Cueリスト</h2>
+      <div class="input-group">
+        <input type="text" id="cueTime" placeholder="mmss">
+        <input type="text" id="cueName" placeholder="Cue名">
+        <button id="addCue">Cue追加</button>
+      </div>
+      <ul id="cueList" class="cueList"></ul>
+    </div>
+  </div>
+  
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      // WakeLock APIでスマホのスリープを防止（対応ブラウザのみ）
+      let wakeLock = null;
+      async function requestWakeLock() {
+        try {
+          wakeLock = await navigator.wakeLock.request('screen');
+          wakeLock.addEventListener('release', () => {
+            console.log('Wake Lock が解除されました。');
+          });
+          console.log('Wake Lock が有効です。');
+        } catch (err) {
+          console.error('Wake Lock のリクエストに失敗:', err);
+        }
+      }
+      if ('wakeLock' in navigator) {
+        requestWakeLock();
+      }
+      
+      // 要素の取得
+      const clockElement = document.getElementById('clock');
+      const stopwatchElement = document.getElementById('stopwatch');
+      const nextCueElement = document.getElementById('nextCue');
+      const cueListElement = document.getElementById('cueList');
+      const cueTimeInput = document.getElementById('cueTime');
+      const cueNameInput = document.getElementById('cueName');
+      const addCueButton = document.getElementById('addCue');
+      const toggleStopwatchBtn = document.getElementById('toggleStopwatch');
+      const resetStopwatchBtn = document.getElementById('resetStopwatch');
+      
+      // ストップウォッチ用変数（ミリ秒単位で管理）
+      let stopwatchInterval = null;
+      let stopwatchTime = 0; // 経過ミリ秒
+      let lastUpdateTime = null;
+      let isRunning = false; // ストップウォッチの状態
+      
+      // Cueの配列（各Cueは { time: 秒, name: 文字列 } 形式）
+      let cues = [];
+      
+      // ストップウォッチのフォーマット（ミリ秒→ mm:ss:SS）
+      function formatStopwatch(ms) {
+        const totalSeconds = Math.floor(ms / 1000);
+        const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, '0');
+        const seconds = String(totalSeconds % 60).padStart(2, '0');
+        const milliseconds = String(ms % 1000).padStart(3, '0').slice(0, 2);
+        return `${minutes}:${seconds}.${milliseconds}`;
+      }
+      
+      // 24時間時計のフォーマット（HH時MM分SS秒）
+      function formatClock(date) {
+        const hours = String(date.getHours()).padStart(2, '0');
+        const minutes = String(date.getMinutes()).padStart(2, '0');
+        const seconds = String(date.getSeconds()).padStart(2, '0');
+        return `${hours}時${minutes}分${seconds}秒`;
+      }
+      
+      // 24時間時計の更新
+      function updateClock() {
+        clockElement.textContent = formatClock(new Date());
+      }
+      setInterval(updateClock, 1000);
+      updateClock();
+      
+      // ストップウォッチの更新（10msごと）
+      function updateStopwatch() {
+        const now = performance.now();
+        if (lastUpdateTime !== null) {
+          stopwatchTime += now - lastUpdateTime;
+        }
+        lastUpdateTime = now;
+        stopwatchElement.textContent = formatStopwatch(stopwatchTime);
+        checkCues();
+      }
+      
+      // トグルボタンによるスタート／一時停止の切り替え
+      toggleStopwatchBtn.addEventListener('click', () => {
+        if (isRunning) {
+          // 一時停止
+          clearInterval(stopwatchInterval);
+          stopwatchInterval = null;
+          isRunning = false;
+          toggleStopwatchBtn.textContent = '再開';
+          lastUpdateTime = null;
+        } else {
+          // スタート／再開
+          isRunning = true;
+          lastUpdateTime = performance.now();
+          stopwatchInterval = setInterval(updateStopwatch, 10);
+          toggleStopwatchBtn.textContent = '一時停止';
+        }
+      });
+      
+      // リセットボタン：停止状態にしてからリセット
+      resetStopwatchBtn.addEventListener('click', () => {
+        clearInterval(stopwatchInterval);
+        stopwatchInterval = null;
+        isRunning = false;
+        stopwatchTime = 0;
+        lastUpdateTime = null;
+        stopwatchElement.textContent = formatStopwatch(stopwatchTime);
+        toggleStopwatchBtn.textContent = 'スタート';
+        cues.sort((a, b) => a.time - b.time);
+        renderCueList();
+      });
+      
+      // Cue追加処理（時間は "mmss" 形式、名前は任意）
+      function addCue(timeString, name) {
+        if (timeString.length !== 4 || isNaN(timeString)) {
+          alert('時間はmmss形式（4桁）で入力してください');
+          return;
+        }
+        const minutes = parseInt(timeString.slice(0, 2), 10);
+        const seconds = parseInt(timeString.slice(2), 10);
+        const totalSeconds = minutes * 60 + seconds;
+        cues.push({ time: totalSeconds, name: name || '' });
+        cues.sort((a, b) => a.time - b.time);
+        renderCueList();
+      }
+      
+      // Cueリストの描画（削除・編集ボタン付き）
+      function renderCueList() {
+        cueListElement.innerHTML = '';
+        cues.forEach((cue, index) => {
+          const mm = String(Math.floor(cue.time / 60)).padStart(2, '0');
+          const ss = String(cue.time % 60).padStart(2, '0');
+          
+          const li = document.createElement('li');
+          li.className = 'cue';
+          li.dataset.cueTime = cue.time;
+          li.dataset.cueIndex = index;
+          
+          const textSpan = document.createElement('span');
+          textSpan.textContent = `Cue ${index + 1}: ${mm}:${ss} ${cue.name}`;
+          
+          const btnGroup = document.createElement('div');
+          
+          const editBtn = document.createElement('button');
+          editBtn.textContent = '編集';
+          editBtn.addEventListener('click', () => {
+            const newName = prompt('新しいCue名を入力してください', cue.name);
+            if (newName !== null) {
+              cue.name = newName;
+              renderCueList();
+            }
+          });
+          
+          const delBtn = document.createElement('button');
+          delBtn.textContent = '削除';
+          delBtn.addEventListener('click', () => {
+            cues = cues.filter((_, i) => i !== index);
+            renderCueList();
+          });
+          
+          btnGroup.appendChild(editBtn);
+          btnGroup.appendChild(delBtn);
+          
+          li.appendChild(textSpan);
+          li.appendChild(btnGroup);
+          cueListElement.appendChild(li);
+        });
+      }
+      
+      addCueButton.addEventListener('click', () => {
+        const timeVal = cueTimeInput.value.trim();
+        const nameVal = cueNameInput.value.trim();
+        if (timeVal) {
+          addCue(timeVal, nameVal);
+          cueTimeInput.value = '';
+          cueNameInput.value = '';
+        }
+      });
+      
+      // 次のCueまでの秒数表示更新
+      function updateNextCueDisplay() {
+        const currentSeconds = Math.floor(stopwatchTime / 1000);
+        const nextCue = cues.find(cue => cue.time > currentSeconds);
+        if (nextCue !== undefined) {
+          const diff = nextCue.time - currentSeconds;
+          nextCueElement.textContent = `次のCueまで: ${diff}秒`;
+        } else {
+          nextCueElement.textContent = 'すべてのCueが終了';
+        }
+      }
+      
+      // Cue開始の5秒前からリマインド状態にする処理
+      function checkCues() {
+        updateNextCueDisplay();
+        const currentSeconds = Math.floor(stopwatchTime / 1000);
+        document.querySelectorAll('.cue').forEach(item => {
+          const cueTimeSec = parseInt(item.dataset.cueTime, 10);
+          const diff = cueTimeSec - currentSeconds;
+          if (diff <= 5 && diff > 0) {
+            item.classList.add('remind');
+          } else {
+            item.classList.remove('remind');
+          }
+          // Cue終了後3秒以内で最後尾に移動
+          if (diff <= 0 && diff > -3) {
+            const cueIndex = parseInt(item.dataset.cueIndex, 10);
+            const completedCue = cues[cueIndex];
+            cues.splice(cueIndex, 1);
+            cues.push(completedCue);
+            renderCueList();
+          }
+        });
+      }
+    });
+  </script>
+</body>
+</html>
