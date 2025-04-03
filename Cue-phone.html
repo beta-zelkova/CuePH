@@ -6,7 +6,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Cueコントロールアプリ</title>
   <style>
-    /* 共通スタイル */
     body {
       font-family: Arial, sans-serif;
       margin: 20px;
@@ -21,7 +20,6 @@
       margin: 10px 0;
       text-align: center;
     }
-    /* 次のCue表示の文字を小さく */
     #nextCue {
       font-size: 2em;
       margin: 10px 0;
@@ -337,7 +335,7 @@
           const diff = nextCue.time - currentSeconds;
           nextCueElement.textContent = `次のCueまで: ${diff}`;
         } else {
-          nextCueElement.textContent = 'すべてのCueが終了';
+          nextCueElement.textContent = '終了';
         }
       }
       
@@ -348,20 +346,26 @@
         document.querySelectorAll('.cue').forEach(item => {
           const cueTimeSec = parseInt(item.dataset.cueTime, 10);
           const diff = cueTimeSec - currentSeconds;
+
+          // 5秒前からリマインドを開始
           if (diff <= 5 && diff > 0) {
-            item.classList.add('remind');
-          } else {
-            item.classList.remove('remind');
-          }
+            item.classList.add('remind');}
+
+          // Cueの時間が過ぎたらリマインドを解除（他のCueの影響を受けない）
+          if (diff <= 0) {
+            setTimeout(() => {
+              item.classList.remove('remind');
+            }, 3000); // 3秒後に解除
+          }});
+
           // Cue終了後3秒以内で最後尾に移動
-          if (diff <= 0 && diff > -3) {
+          if (diff <= 0) {
             const cueIndex = parseInt(item.dataset.cueIndex, 10);
             const completedCue = cues[cueIndex];
             cues.splice(cueIndex, 1);
             cues.push(completedCue);
             renderCueList();
-          }
-        });
+          };
       }
     });
   </script>
